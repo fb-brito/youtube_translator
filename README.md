@@ -1,6 +1,5 @@
 # Youtube Transcript Translator
 
-![Interface do Projeto](https://i.imgur.com/g0t6jLw.png)
 
 ## 📖 Descrição do Projeto
 
