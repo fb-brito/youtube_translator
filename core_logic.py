@@ -1,5 +1,6 @@
 import yt_dlp
 import os
+import sys
 import json
 import re
 from datetime import datetime
@@ -7,7 +8,19 @@ import whisper
 from deep_translator import GoogleTranslator
 from TTS.api import TTS
 
-# --- Sistemas de Log Estruturado ---
+def log_error(function_name, library, error, solution):
+    log_dir, log_file = "logs", os.path.join("logs", "system_errors.csv")
+    os.makedirs(log_dir, exist_ok=True)
+    header = "timestamp;function_name;library_used;error_message;proposed_solution\n"
+    if not os.path.exists(log_file):
+        with open(log_file, 'w', encoding='utf-8') as f:
+            f.write(header)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    error_cleaned = str(error).replace('"', "'").replace('\n', ' ')
+    log_entry = f"{timestamp};{function_name};{library};\"{error_cleaned}\";\"{solution}\"\n"
+    with open(log_file, 'a', encoding='utf-8') as f:
+        f.write(log_entry)
+
 def log_master_record(video_info, operation, status, source_file, output_file):
     log_dir, log_file = "logs", os.path.join("logs", "master_log.csv")
     os.makedirs(log_dir, exist_ok=True)
@@ -25,20 +38,6 @@ def log_master_record(video_info, operation, status, source_file, output_file):
     with open(log_file, 'a', encoding='utf-8') as f:
         f.write(log_entry)
 
-def log_error(function_name, library, error, solution):
-    log_dir, log_file = "logs", os.path.join("logs", "system_errors.csv")
-    os.makedirs(log_dir, exist_ok=True)
-    header = "timestamp;function_name;library_used;error_message;proposed_solution\n"
-    if not os.path.exists(log_file):
-        with open(log_file, 'w', encoding='utf-8') as f:
-            f.write(header)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    error_cleaned = str(error).replace('"', "'").replace('\n', ' ')
-    log_entry = f"{timestamp};{function_name};{library};\"{error_cleaned}\";\"{solution}\"\n"
-    with open(log_file, 'a', encoding='utf-8') as f:
-        f.write(log_entry)
-
-# --- Funções Utilitárias ---
 def clean_vtt_content(vtt_content):
     lines = vtt_content.splitlines()
     cleaned_lines = []
@@ -51,7 +50,8 @@ def clean_vtt_content(vtt_content):
             cleaned_lines.append(line)
     return " ".join(cleaned_lines)
 
-def save_transcript(base_filename, content, video_info):
+def save_transcript(base_filename, video_info):
+    content = video_info.get('content')
     txt_path = os.path.join('logs', 'transcricao_original', 'txt')
     os.makedirs(txt_path, exist_ok=True)
     full_txt_path = os.path.join(txt_path, f"{base_filename}.txt")
@@ -65,16 +65,16 @@ def save_transcript(base_filename, content, video_info):
         json.dump(video_info, f, ensure_ascii=False, indent=4)
     return full_txt_path, full_json_path
 
-# --- Funções Principais ---
 def download_transcript(video_url, log_callback):
-    video_info = {}
+    # ... (código existente sem alteração)
+    video_info, final_paths = {}, {}
     try:
-        log_callback("1. Iniciando download da transcrição via yt-dlp...")
+        log_callback("1. Iniciando download da transcrição...")
         ydl_opts = {'writeautomaticsub': True, 'skip_download': True, 'outtmpl': 'temp_subtitle', 'quiet': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             ydl.download([video_url])
-        log_callback("2. Metadados e arquivo bruto baixados.")
+        log_callback("2. Arquivo bruto baixado.")
 
         subtitle_file_path, downloaded_lang = next(((f"temp_subtitle.{lc}.vtt", lc.split('-')[0]) for lc in info.get('automatic_captions', {}) if os.path.exists(f"temp_subtitle.{lc}.vtt")), (None, None))
         if not subtitle_file_path: raise ValueError("Nenhuma transcrição automática encontrada.")
@@ -83,31 +83,33 @@ def download_transcript(video_url, log_callback):
             cleaned_content = clean_vtt_content(f.read())
         os.remove(subtitle_file_path)
 
-        log_callback(f"3. Texto limpo. Idioma: {downloaded_lang}.")
+        log_callback(f"3. Texto limpo. Idioma detectado: {downloaded_lang}.")
         if not cleaned_content: raise ValueError("Falha ao extrair texto da transcrição.")
 
+        log_callback("4. Salvando arquivos finais...")
         video_id, upload_date_str = info.get('id', 'desconhecido'), info.get('upload_date', '19700101')
         video_info = {'id': video_id, 'title': info.get('title', 'sem_titulo'), 'upload_date': datetime.strptime(upload_date_str, '%Y%m%d').strftime('%Y-%m-%d'), 'source_language': downloaded_lang, 'content': cleaned_content}
         base_filename = f"{upload_date_str}_{video_id}_original"
+        txt_path, json_path = save_transcript(base_filename, video_info)
+        final_paths = {'txt_path': txt_path, 'json_path': json_path, 'video_info': video_info}
 
-        log_callback("4. Salvando arquivos finais...")
-        txt_path, json_path = save_transcript(base_filename, cleaned_content, video_info)
         log_master_record(video_info, "download_transcript", "SUCCESS", video_url, txt_path)
-        return True, f"Transcrição ({downloaded_lang}) baixada!", {'txt_path': txt_path, 'json_path': json_path, 'video_info': video_info}
+        return True, f"Transcrição ({downloaded_lang}) baixada!", final_paths
     except Exception as e:
         log_error("download_transcript", "yt-dlp", str(e), "Verificar link do YouTube e conexão.")
         log_master_record(video_info, "download_transcript", "FAIL", video_url, None)
         return False, f"Erro: {e}", None
 
 def transcribe_audio_local(video_url, log_callback):
-    audio_file_path, video_info = None, {}
+    # ... (código existente sem alteração)
+    audio_file_path, video_info, final_paths = None, {}, {}
     try:
         log_callback("1. Iniciando download do áudio...")
         ydl_opts = {'format': 'bestaudio/best', 'outtmpl': 'temp_audio.%(ext)s', 'quiet': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             audio_file_path = ydl.prepare_filename(info)
-        log_callback("2. Download concluído.")
+        log_callback("2. Download do áudio concluído.")
 
         if not audio_file_path or not os.path.exists(audio_file_path): raise FileNotFoundError("Falha ao baixar áudio.")
 
@@ -124,10 +126,11 @@ def transcribe_audio_local(video_url, log_callback):
         video_id, upload_date_str = info.get('id', 'desconhecido'), info.get('upload_date', '19700101')
         video_info = {'id': video_id, 'title': info.get('title', 'sem_titulo'), 'upload_date': datetime.strptime(upload_date_str, '%Y%m%d').strftime('%Y-%m-%d'), 'source_language': detected_language, 'content': transcribed_text}
         base_filename = f"{upload_date_str}_{video_id}_original_audio"
-        txt_path, json_path = save_transcript(base_filename, transcribed_text, video_info)
+        txt_path, json_path = save_transcript(base_filename, video_info)
+        final_paths = {'txt_path': txt_path, 'json_path': json_path, 'video_info': video_info}
 
         log_master_record(video_info, "transcribe_audio_local", "SUCCESS", video_url, txt_path)
-        return True, f"Áudio transcrito ({detected_language}) com sucesso!", {'txt_path': txt_path, 'json_path': json_path, 'video_info': video_info}
+        return True, f"Áudio transcrito ({detected_language}) com sucesso!", final_paths
     except Exception as e:
         log_error("transcribe_audio_local", "whisper/yt-dlp", str(e), "Verificar FFmpeg e bibliotecas.")
         log_master_record(video_info, "transcribe_audio_local", "FAIL", video_url, None)
@@ -146,18 +149,33 @@ def translate_file_local(source_json_path, log_callback):
             video_info = json.load(f)
 
         source_lang, original_content = video_info.get("source_language", "auto"), video_info.get("content")
-        log_callback(f"3. Idioma de origem: {source_lang}.")
+        log_callback(f"3. Idioma de origem detectado: {source_lang}.")
         if source_lang == 'pt':
             log_callback("4. Texto já está em PT-BR. Tradução não necessária.")
             return True, "Texto já em Português.", {'json_path': source_json_path, 'video_info': video_info}
 
         if not original_content: raise ValueError("Arquivo de origem está vazio.")
-        log_callback("4. Traduzindo conteúdo...")
-        translated_content = GoogleTranslator(source=source_lang, target='pt').translate(original_content)
+
+        # --- NOVA LÓGICA DE CHUNKING ---
+        log_callback("4. Verificando tamanho do texto para tradução...")
+        translated_content = ""
+        limit = 4500 # Limite de segurança um pouco abaixo de 5000
+        if len(original_content) > limit:
+            log_callback(f"Texto longo detectado ({len(original_content)} caracteres). Dividindo em pedaços...")
+            chunks = [original_content[i:i+limit] for i in range(0, len(original_content), limit)]
+            total_chunks = len(chunks)
+            for i, chunk in enumerate(chunks):
+                log_callback(f"Traduzindo parte {i+1} de {total_chunks}...")
+                translated_chunk = GoogleTranslator(source=source_lang, target='pt').translate(chunk)
+                translated_content += translated_chunk
+        else:
+            log_callback("Texto curto. Traduzindo de uma só vez...")
+            translated_content = GoogleTranslator(source=source_lang, target='pt').translate(original_content)
+
         log_callback("5. Tradução concluída.")
 
         translated_filename = os.path.basename(source_json_path).replace("_original", "_traduzido")
-        log_callback("6. Salvando arquivos traduzidos...")
+        log_callback(f"6. Salvando arquivos traduzidos...")
         txt_path = os.path.join('logs', 'transcricao_traduzida', 'txt', translated_filename.replace('.json', '.txt'))
         os.makedirs(os.path.dirname(txt_path), exist_ok=True)
         with open(txt_path, 'w', encoding='utf-8') as f:
@@ -177,6 +195,7 @@ def translate_file_local(source_json_path, log_callback):
         return False, f"Erro na tradução: {e}", None
 
 def generate_tts_audio(source_translated_json_path, log_callback):
+    # ... (código existente sem alteração)
     video_info = {}
     try:
         log_callback("1. Iniciando geração de Áudio (TTS)...")
@@ -188,7 +207,7 @@ def generate_tts_audio(source_translated_json_path, log_callback):
         translated_text = video_info.get("content")
         if not translated_text: raise ValueError("Conteúdo traduzido está vazio.")
 
-        log_callback("3. Carregando modelo TTS (pode levar tempo)...")
+        log_callback("3. Carregando modelo TTS...")
         tts = TTS(model_name="tts_models/pt/cv/vits", progress_bar=False, gpu=False)
         log_callback("4. Gerando áudio MP3...")
 
